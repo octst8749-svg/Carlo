@@ -47,6 +47,11 @@ canvas#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-actio
 .shophead h1{font-size:26px;margin:0}
 #shopCoins{background:#fff6c9;border-radius:16px;padding:7px 12px;font-weight:800;color:#7a5a00;white-space:nowrap}
 .small{font-size:14px!important}
+.item .bt{display:flex;flex-direction:column;gap:6px}
+.item .bt button{min-width:84px;padding:9px 8px}
+.item button.rc{background:#e03b3b}
+.item button.pl{background:#4ea8de}
+#recCount{font-weight:800;color:#7a5a00}
 .grp{font-weight:800;color:#7a5a00;margin:14px 0 6px}
 .item{display:flex;align-items:center;gap:10px;padding:8px;border-radius:14px;background:#f4f7ec;margin-bottom:8px}
 .item .ic{font-size:30px;width:40px;text-align:center}
@@ -88,6 +93,17 @@ canvas#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-actio
     <p class="small">Saml mønter i byen og ved at hjælpe folk. Opgraderingerne gemmes til næste tur.</p>
     <div id="shopList"></div>
     <button class="btn" id="shopClose">Tilbage til byen</button>
+  </div>
+</div>
+<div id="rec" class="overlay hidden">
+  <div class="card shopcard">
+    <div class="shophead"><h1>🎙️ Indtal stemmer</h1><div id="recCount">0/0</div></div>
+    <p class="small">Tryk på ● og sig replikken højt. Tryk på ■ når du er færdig. Så bruger spillet din stemme i stedet for computerstemmen. Hvis en replik ikke er indtalt, læser computeren den op.</p>
+    <div id="recList"></div>
+    <button class="btn alt" id="recExport">⬇️ Gem alle optagelser i en fil</button>
+    <button class="btn alt" id="recImport">⬆️ Hent optagelser fra fil</button>
+    <input type="file" id="recFile" accept=".json,application/json" style="display:none">
+    <button class="btn" id="recClose">Tilbage</button>
   </div>
 </div>
 <div id="end" class="overlay hidden">
@@ -410,12 +426,53 @@ function profileFor(who) {
   if (who === 'Fie' || who === 'Thea') return { g: 'f', p: 1.45, r: 1.0 };
   return { g: 'f', p: 1.05, r: .92 };
 }
+function cleanText(text) {
+  return String(text).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B50}]/gu, '').replace(/\(\d+\/\d+\)/g, '').replace(/\(\s*([^)]*?)\)/g, (m, t) => t.trim() ? ', ' + t.trim() + ',' : '').replace(/\s[–—-]\s/g, ', ').replace(/\s+/g, ' ').replace(/\s+([.,!?])/g, '$1').trim();
+}
+const recKey = (who, clean) => (who === 'Fie' || who === 'Thea') ? who + '|' + clean : clean;
+/* ---------- indtalte stemmer (gemmes på enheden i IndexedDB) ---------- */
+const REC = { db: null, blobs: {}, urls: {}, cur: null };
+function recOpen(cb) {
+  try {
+    const rq = indexedDB.open('carlos-by-stemmer', 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore('rec');
+    rq.onsuccess = () => { REC.db = rq.result; cb && cb(); };
+    rq.onerror = () => {};
+  } catch (e) {}
+}
+function recLoadAll() {
+  if (!REC.db) return;
+  try {
+    const st = REC.db.transaction('rec').objectStore('rec'), rq = st.openCursor();
+    rq.onsuccess = () => { const c = rq.result; if (c) { REC.blobs[c.key] = c.value; c.continue(); } else if (typeof renderRec === 'function') renderRec(); };
+  } catch (e) {}
+}
+function recPut(key, blob) {
+  REC.blobs[key] = blob; delete REC.urls[key];
+  try { REC.db.transaction('rec', 'readwrite').objectStore('rec').put(blob, key); } catch (e) {}
+}
+function recDel(key) {
+  delete REC.blobs[key]; delete REC.urls[key];
+  try { REC.db.transaction('rec', 'readwrite').objectStore('rec').delete(key); } catch (e) {}
+}
+function recPlay(key, done) {
+  const b = REC.blobs[key]; if (!b) return false;
+  try {
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+    if (REC.cur) { try { REC.cur.pause(); } catch (e) {} }
+    const url = REC.urls[key] || (REC.urls[key] = URL.createObjectURL(b));
+    const a = new Audio(url); REC.cur = a; a.onended = () => done && done();
+    const pr = a.play(); if (pr && pr.catch) pr.catch(() => done && done());
+    return true;
+  } catch (e) { return false; }
+}
 function speak(text, force, who) {
   if ((!P.speak && !force) || !text) return;
   try {
-    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
-    const clean = String(text).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B50}]/gu, '').replace(/\(\d+\/\d+\)/g, '').replace(/\(\s*([^)]*?)\)/g, (m, t) => t.trim() ? ', ' + t.trim() + ',' : '').replace(/\s[–—-]\s/g, ', ').replace(/\s+/g, ' ').trim();
+    const clean = cleanText(text);
     if (!clean) return;
+    if (recPlay(recKey(who, clean))) return;
+    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
     const parts = clean.match(/[^.!?]+[.!?]*/g) || [clean];
     const pr = profileFor(who), v = bestVoice(pr.g);
     window.speechSynthesis.cancel();
@@ -467,7 +524,7 @@ function objectiveDone() {
   S.phase = 'return'; objs = []; S.carry = null; sfx.win();
   const q = QUESTS.find(q => q.id === S.active);
   updateHud();
-  say(PN(), 'Det var det hele! Lad os gå tilbage til ' + npcById(q.giver).name + '.', 4500);
+  say(PN(), 'Det var det hele! Lad os gå tilbage og fortælle det.', 4500);
 }
 const QUESTS = [
   { id: 'bageri', giver: 'lone', icon: '🥐', title: () => 'Find Lones croissanter (' + S.n + '/4)',
@@ -568,7 +625,7 @@ function sniffAction() {
   const a = Math.atan2(it.y - player.y, it.x - player.x);
   const tx = clamp(player.x + Math.cos(a) * 100, 40, W - 40), ty = clamp(player.y + Math.sin(a) * 100, 80, H - 20);
   sendCarlo(tx, ty, () => {
-    const msg = bd < 280 ? 'Meget varmt! 🔥 Carlo er helt tæt på!' : bd < 550 ? 'Varmt! Carlo har fundet et spor.' : bd < 950 ? 'Lunkent… Følg sporet.' : 'Koldt 🥶 Det er langt væk. Følg sporet.';
+    const msg = bd < 280 ? 'Meget varmt! 🔥 Carlo er helt tæt på!' : bd < 550 ? 'Varmt! Carlo har fundet et spor.' : bd < 950 ? 'Lunkent… Følg sporet.' : 'Koldt! 🥶 Det er langt væk. Følg sporet.';
     say('Carlo', msg, 3500);
     const maxN = Math.min(7, Math.floor(bd / 46));
     for (let i = 1; i <= maxN; i++) TRAIL.push({ x: tx + Math.cos(a) * 46 * i + (i % 2 ? 5 : -5) * Math.sin(a), y: ty + Math.sin(a) * 46 * i - (i % 2 ? 5 : -5) * Math.cos(a), a, t: -i * .14 });
@@ -682,7 +739,7 @@ function newGame(resume) {
   S.state = 'play';
   $('menu').classList.add('hidden'); $('end').classList.add('hidden'); $('shop').classList.add('hidden'); shopOpen = false;
   updateHud();
-  say(PN(), 'Velkommen til byen! Find folk med ❗ over hovedet og hjælp dem. 🪙 Saml også mønter og køb opgraderinger i butikken (🛍️ øverst).', 9000);
+  say(PN(), 'Velkommen til byen! Find folk med ❗ over hovedet og hjælp dem. 🪙 Saml også mønter og køb opgraderinger i butikken øverst (🛍️).', 9000);
 }
 
 /* ---------- menu ---------- */
@@ -716,7 +773,8 @@ function renderShop() {
     else { label = 'Ejer ✓'; cls = 'on'; }
     h += '<div class="item"><div class="ic">' + it.icon + '</div><div class="tx"><b>' + it.name + '</b>' + it.desc + '</div><button data-id="' + it.id + '" class="' + cls + '">' + label + '</button></div>';
   }
-  h += '<div class="grp">Stemme til oplæsning</div>';
+  h += '<div class="grp">Stemmer</div><div class="item"><div class="ic">🎙️</div><div class="tx"><b>Indtal stemmerne selv</b>Læs replikkerne højt, så bruger spillet jeres egne stemmer</div><button data-rec="1" class="on">Åbn</button></div>';
+  h += '<div class="grp">Stemme til oplæsning (computer)</div>';
   loadVoices();
   if (!VOICES.length) h += '<div class="item"><div class="tx">Jeg kan ikke se nogen danske stemmer på denne enhed endnu. Oplæsningen bruger enhedens egen stemme.</div></div>';
   else {
@@ -734,6 +792,7 @@ $('shopBtn').addEventListener('click', openShop);
 $('shopClose').addEventListener('click', closeShop);
 $('shopList').addEventListener('click', e => {
   const b = e.target.closest ? e.target.closest('button') : null; if (!b) return;
+  if (b.dataset.rec !== undefined) { audio(); openRec(); return; }
   if (b.dataset.voice !== undefined) {
     audio(); P.voice = b.dataset.voice; saveProfile();
     speak('Hej! Jeg er ' + PN() + ', og jeg læser opgaverne højt for dig.', true, PN());
@@ -749,6 +808,98 @@ $('shopList').addEventListener('click', e => {
   else return;
   saveProfile(); renderShop(); updateHud();
 });
+
+/* ---------- indtalings-skærm ---------- */
+const REC_LINES = [["Hjælper", "Velkommen til byen! Find folk med over hovedet og hjælp dem. Saml også mønter og køb opgraderinger i butikken øverst."], ["Hjælper", "Det var det hele! Lad os gå tilbage og fortælle det."], ["Carlo", "Varmt! Carlo har fundet et spor."], ["Carlo", "Vov vov! Carlo fandt noget!"], ["Carlo", "Koldt! Det er langt væk. Følg sporet."], ["Carlo", "Lunkent… Følg sporet."], ["Carlo", "Meget varmt! Carlo er helt tæt på!"], ["Bager Lone", "Åh nej! Min kat Mis har taget fire croissanter og gemt dem rundt i byen. Kan I finde dem for mig?"], ["Bager Lone", "Mis har gemt croissanterne rundt i byen. Kig langs gaderne og i parken!"], ["Bager Lone", "Tusind tak! Her er en varm bolle til jer, og en lille bid til Carlo."], ["Bager Lone", "Croissanterne er fundet!"], ["Bager Lone", "Duften af friskbagte boller er min yndlingsduft!"], ["Bager Lone", "Mis, min kat, ligger og sover i vinduet nu."], ["Postbud Poul", "Min cykel har fået punktering, og jeg har tre breve, der skal afsted! Kan I lægge dem i de røde postkasser?"], ["Postbud Poul", "De røde postkasser står rundt i byen. Du har breve til tre af dem!"], ["Postbud Poul", "Fantastisk! Nu kommer posten frem til tiden. Tak for hjælpen!"], ["Postbud Poul", "Posten er afleveret!"], ["Postbud Poul", "Post skal frem, i al slags vejr!"], ["Postbud Poul", "Min cykel er heldigvis blevet lappet."], ["Isman Ib", "Min isske er væk! Jeg tror, den ligger under en busk. Carlo har en fantastisk snude, kan han snuse den op?"], ["Isman Ib", "Gå hen til en busk og send Carlo ind for at snuse efter issken."], ["Isman Ib", "Der er den jo! Tusind tak. Nu får I hver en kæmpe is, og Carlo en lille smagsprøve!"], ["Isman Ib", "Issken er fundet!"], ["Isman Ib", "Jordbær, vanilje eller chokolade?"], ["Isman Ib", "Carlo får altid en lille smagsprøve!"], ["Fru Hansen", "Jeg savner nogle friske blomster til mit bord. Vil I plukke tre til mig? Der vokser nogle nede i parken."], ["Fru Hansen", "Blomsterne vokser i græsset syd for torvet."], ["Fru Hansen", "Åh, hvor er de smukke! Tak, kære. Og goddag til dig også, Carlo!"], ["Fru Hansen", "Fru Hansen er glad!"], ["Fru Hansen", "Det er dejligt at sidde i solen."], ["Fru Hansen", "Carlo er sådan en rar hund."], ["Parkvagt Anna", "Ællingerne i søen er så sultne! Her er lidt brød. Vil I give dem det nede ved vandkanten?"], ["Parkvagt Anna", "Gå hen til vandkanten i søen og giv ællingerne brød."], ["Parkvagt Anna", "Kvak kvak! De er mætte og glade. Tusind tak for hjælpen!"], ["Parkvagt Anna", "Ællingerne er mætte!"], ["Parkvagt Anna", "Ællingerne vokser så hurtigt!"], ["Parkvagt Anna", "Husk at holde parken ren."], ["Svend fra Renovationen", "Nogen har tabt skrald rundt i byen. Kan I samle tre stykker op og smide dem i skraldespanden på torvet?"], ["Svend fra Renovationen", "Find skraldet på gaderne og smid det i skraldespanden ved torvet."], ["Svend fra Renovationen", "Sådan! En ren by er en glad by. I er rigtige byhelte!"], ["Svend fra Renovationen", "Byen er ren!"], ["Svend fra Renovationen", "En ren by er en glad by!"], ["Mads", "Jeg bygger verdens fedeste hule, men jeg mangler fem pinde! Kan I finde nogle til mig?"], ["Mads", "Pindene ligger rundt omkring på græsset syd for gaden."], ["Mads", "Yes! Nu kan jeg bygge taget færdigt. Du må godt komme på besøg, Carlo!"], ["Mads", "Hulen er reddet!"], ["Mads", "Min hule er den fedeste i hele byen!"], ["Mads", "Må Carlo være med i hulen?"], ["Turist Maja", "Jeg er turist og har glemt mit kamera-stativ! Vil I gå hen til tre steder i byen og tage et billede af hver?"], ["Turist Maja", "Billedstederne er ved springvandet, ved bageriet og ved søen."], ["Turist Maja", "Wow, de er smukke! Det bliver mit bedste feriealbum. Tak!"], ["Turist Maja", "Fotoalbummet er fyldt!"], ["Turist Maja", "Hvilken dejlig by I har!"], ["Turist Maja", "Jeg elsker at tage billeder af alt."], ["Frisør Gitte", "Åh nej, min bedste saks er væk! Jeg har lagt den et sted i byen. Carlo har en fantastisk snude. Tryk på snude-knappen, så viser han vej med poteaftryk!"], ["Frisør Gitte", "Tryk på snude-knappen, så viser Carlo vej med poteaftryk. Jo tættere på, jo varmere!"], ["Frisør Gitte", "Min saks! Tusind tak. Carlo er byens bedste spor-hund!"], ["Frisør Gitte", "Saksen er fundet!"], ["Frisør Gitte", "Har du set min saks? Nå nej, den er jo fundet!"], ["Frisør Gitte", "Carlo har den fineste pels i byen."], ["Bibliotekar Bente", "Vinden har blæst tre bøger ud af biblioteket! Kan Carlo snuse dem op? Tryk på snude-knappen og følg hans spor."], ["Bibliotekar Bente", "Tryk på snude-knappen og følg poteaftrykkene. Der er tre bøger gemt i byen."], ["Bibliotekar Bente", "Bøgerne er reddet! Du og Carlo er velkomne til sagnstund."], ["Bibliotekar Bente", "Bøgerne er fundet!"], ["Bibliotekar Bente", "Pssst, på biblioteket hvisker vi!"], ["Bibliotekar Bente", "Carlo må gerne komme til sagnstund."], ["Pirat-Pelle", "Arrr! Jeg har gravet tre skatte ned rundt i byen, men glemt hvor! Carlos snude kan finde dem. Tryk på snude-knappen!"], ["Pirat-Pelle", "Tryk på snude-knappen. Carlo viser vej, og de sidste meter graver han selv."], ["Pirat-Pelle", "Arrr, mine skatte! I er rigtige skattejægere!"], ["Pirat-Pelle", "Skatten er fundet!"], ["Pirat-Pelle", "Arrr! Det var en god skattejagt!"], ["Pirat-Pelle", "En pirat har altid brug for en god hund."], ["Hundeejer Dorte", "Min lille hund Bimse er løbet hen og gemmer sig! Kan Carlo snuse ham op? Tryk på snude-knappen og følg sporet."], ["Hundeejer Dorte", "Tryk på snude-knappen og følg poteaftrykkene hen til Bimse."], ["Hundeejer Dorte", "Åh, Bimse! Tak, Carlo. Du er en rigtig spionhund!"], ["Hundeejer Dorte", "Bimse er fundet!"], ["Hundeejer Dorte", "Bimse og Carlo er gode venner."], ["Hundeejer Dorte", "Hunde er de bedste detektiver."], ["Café-Karl", "Jeg har tre kopper kaffe, men der er kø i caféen! Kan I give dem til Poul, Maja og Svend?"], ["Café-Karl", "Kaffen skal til Postbud Poul, Turist Maja og Svend fra Renovationen."], ["Café-Karl", "Tak for hjælpen! Her er en kakao til jer og en lille kiks til Carlo."], ["Café-Karl", "Kaffen er leveret!"], ["Café-Karl", "Kaffe, kakao eller en kage?"], ["Café-Karl", "Hos mig er der altid plads til en hund."], ["Fotograf Frank", "Fem balloner til min åbning er fløjet væk! Kan I fange dem, før de forsvinder?"], ["Fotograf Frank", "Ballonerne svæver rundt omkring i byen. Kig efter dem!"], ["Fotograf Frank", "Hvor flot! Nu bliver åbningen helt perfekt. Tak!"], ["Fotograf Frank", "Ballonerne er fanget!"], ["Fotograf Frank", "Smil! Det bliver et dejligt billede."], ["Fotograf Frank", "Ballonerne pynter flot i butikken."], ["Borgmester Birthe", "Velkommen til vores lille by!"], ["Opgave", "Find Lones croissanter"], ["Opgave", "Aflever breve i postkasserne"], ["Opgave", "Find Ibs isske, send Carlo ind i en busk"], ["Opgave", "Pluk blomster til fru Hansen"], ["Opgave", "Giv ællingerne brød"], ["Opgave", "Saml skrald op"], ["Opgave", "Smid skraldet i skraldespanden"], ["Opgave", "Find pinde til Mads’ hule"], ["Opgave", "Tag billeder af byen med Maja"], ["Opgave", "Find Gittes saks, tryk på og følg Carlo"], ["Opgave", "Find de blæste bøger med Carlos snude"], ["Opgave", "Find Pelles skatte med Carlos snude"], ["Opgave", "Find Bimse, lad Carlo snuse ham op"], ["Opgave", "Aflever kaffe til tre personer"], ["Opgave", "Fang de flyvende balloner"]];
+let recBusy = null; // { key, mr, stream }
+function recKeysFor(w, c) { return w === 'Hjælper' ? [['Fie', 'Fie|' + c], ['Thea', 'Thea|' + c]] : [[null, c]]; }
+function renderRec() {
+  const box = $('recList'); if (!box) return;
+  let h = '', grp = '', total = 0, have = 0;
+  REC_LINES.forEach((ln, i) => {
+    const w = ln[0], c = ln[1];
+    if (w !== grp) { grp = w; h += '<div class="grp">' + (w === 'Opgave' ? '📋 Opgaven øverst på skærmen' : w === 'Hjælper' ? '👧 Fie og Thea (hver for sig)' : w === 'Carlo' ? '🐕 Carlo (snude-hints)' : w) + '</div>'; }
+    recKeysFor(w, c).forEach(([who, key]) => {
+      total++; const has = !!REC.blobs[key]; if (has) have++;
+      const isRec = recBusy && recBusy.key === key;
+      h += '<div class="item"><div class="tx">' + (who ? '<b>' + who + '</b>' : '') + c.replace(/</g, '&lt;') + '</div><div class="bt">' +
+        '<button class="rc" data-rec="' + key.replace(/"/g, '&quot;') + '">' + (isRec ? '■ Stop' : has ? '● Optag igen' : '● Optag') + '</button>' +
+        (has && !isRec ? '<button class="pl" data-play="' + key.replace(/"/g, '&quot;') + '">▶ Hør</button><button data-del="' + key.replace(/"/g, '&quot;') + '" style="background:#999">🗑️ Slet</button>' : '') +
+        '</div></div>';
+    });
+  });
+  const y = box.parentNode.scrollTop;
+  box.innerHTML = h; $('recCount').textContent = have + '/' + total;
+  box.parentNode.scrollTop = y;
+}
+function recStop() {
+  if (!recBusy) return;
+  try { recBusy.mr.stop(); } catch (e) {}
+}
+function recStart(key) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+    alert('Optagelse virker ikke i denne browser. Prøv at åbne spillet i Safari eller Chrome direkte (ikke inde i en anden app).'); return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    const types = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+    const mt = types.find(t => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } });
+    const mr = mt ? new MediaRecorder(stream, { mimeType: mt }) : new MediaRecorder(stream);
+    const chunks = [];
+    mr.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    mr.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: mr.mimeType || mt || 'audio/mp4' });
+      recBusy = null;
+      if (blob.size > 800) recPut(key, blob);
+      renderRec();
+      if (blob.size > 800) recPlay(key);
+    };
+    recBusy = { key, mr, stream };
+    mr.start(); renderRec();
+  }).catch(() => { alert('Spillet må ikke bruge mikrofonen. Tillad mikrofon i browseren og prøv igen.'); });
+}
+$('recList').addEventListener('click', e => {
+  const b = e.target.closest ? e.target.closest('button') : null; if (!b) return; audio();
+  if (b.dataset.rec !== undefined) {
+    const k = b.dataset.rec;
+    if (recBusy) { const same = recBusy.key === k; recStop(); if (same) return; setTimeout(() => recStart(k), 400); return; }
+    try { if (REC.cur) REC.cur.pause(); if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+    recStart(k);
+  } else if (b.dataset.play !== undefined) recPlay(b.dataset.play);
+  else if (b.dataset.del !== undefined) { recDel(b.dataset.del); renderRec(); }
+});
+function openRec() { recStop(); renderRec(); $('shop').classList.add('hidden'); $('rec').classList.remove('hidden'); }
+function closeRec() { recStop(); $('rec').classList.add('hidden'); renderShop(); $('shop').classList.remove('hidden'); }
+$('recClose').addEventListener('click', closeRec);
+$('recExport').addEventListener('click', () => {
+  const keys = Object.keys(REC.blobs); if (!keys.length) { alert('Der er ingen optagelser endnu.'); return; }
+  let out = {}, n = 0;
+  keys.forEach(k => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      out[k] = fr.result; n++;
+      if (n === keys.length) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(out)], { type: 'application/json' }));
+        a.download = 'carlos-by-stemmer.json'; document.body.appendChild(a); a.click(); a.remove();
+      }
+    };
+    fr.readAsDataURL(REC.blobs[k]);
+  });
+});
+$('recImport').addEventListener('click', () => $('recFile').click());
+$('recFile').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => {
+    try {
+      const o = JSON.parse(fr.result);
+      Object.keys(o).forEach(k => { fetch(o[k]).then(r => r.blob()).then(b => { recPut(k, b); renderRec(); }); });
+    } catch (er) { alert('Filen kunne ikke læses.'); }
+  };
+  fr.readAsText(f); e.target.value = '';
+});
+recOpen(recLoadAll);
 
 /* ---------- Carlo ---------- */
 function sendCarlo(x, y, cb) { carlo.send = { x, y, cb, st: 'go', t: 0, total: 0 }; }
@@ -1340,7 +1491,7 @@ function frame(now) {
 }
 cam.x = clamp(START.x - 400, 0, W); cam.y = clamp(START.y - 300, 0, H);
 requestAnimationFrame(frame);
-window.__dbg = { S, player, carlo, P, QUESTS, NPCS, COINS, get objs() { return objs; }, doAction, get cur() { return cur; }, BUSHES, DUCKS, talk, targets };
+window.__dbg = { speak, REC, REC_LINES, S, player, carlo, P, QUESTS, NPCS, COINS, get objs() { return objs; }, doAction, get cur() { return cur; }, BUSHES, DUCKS, talk, targets };
 })();
 </script>
 </body>
