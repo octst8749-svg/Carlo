@@ -337,7 +337,7 @@ const CH = {
 };
 
 /* ---------- profil og butik ---------- */
-const P = { coins: 0, owned: {}, on: {}, ear: { fie: 'leopard', thea: 'none' }, char: 'fie', speak: true };
+const P = { coins: 0, owned: {}, on: {}, ear: { fie: 'leopard', thea: 'none' }, char: 'fie', speak: true, voice: 'auto' };
 const ITEMS = [
   { id: 'ear-none', g: 'Ørevarmere', name: 'Ingen ørevarmere', icon: '🙂', price: 0, kind: 'ear', val: 'none', desc: 'Bare hår og vind' },
   { id: 'ear-leopard', g: 'Ørevarmere', name: 'Leopard-ørevarmere', icon: '🐆', price: 0, kind: 'ear', val: 'leopard', desc: 'Dem Fie altid har på' },
@@ -362,7 +362,7 @@ function loadProfile() {
       const o = JSON.parse(localStorage.getItem('fie-carlo-profile-v1') || 'null');
       if (o) j = { coins: o.coins, owned: o.owned, on: o.on, ear: { fie: o.ear || 'leopard', thea: 'none' }, char: 'fie' };
     }
-    if (j) { P.coins = j.coins | 0; P.owned = j.owned || {}; P.on = j.on || {}; P.ear = Object.assign({ fie: 'leopard', thea: 'none' }, j.ear || {}); P.char = j.char === 'thea' ? 'thea' : 'fie'; P.speak = j.speak !== false; }
+    if (j) { P.coins = j.coins | 0; P.owned = j.owned || {}; P.on = j.on || {}; P.ear = Object.assign({ fie: 'leopard', thea: 'none' }, j.ear || {}); P.char = j.char === 'thea' ? 'thea' : 'fie'; P.speak = j.speak !== false; P.voice = j.voice || 'auto'; }
   } catch (e) {}
 }
 loadProfile();
@@ -381,46 +381,70 @@ function saveProg() { try { localStorage.setItem('carlos-by-progress-v1', JSON.s
 function loadProg() { try { const j = JSON.parse(localStorage.getItem('carlos-by-progress-v1') || 'null'); if (j && j.stars > 0 && j.stars < QUESTS.length) return j; } catch (e) {} return null; }
 function clearProg() { try { localStorage.removeItem('carlos-by-progress-v1'); } catch (e) {} }
 
-let sayTimer = 0, lastSay = '';
-let voiceDa = null;
-function pickVoice() {
-  try {
-    const vs = window.speechSynthesis.getVoices() || [];
-    voiceDa = vs.find(v => /^da/i.test(v.lang) && /female|sara|helle|naja/i.test(v.name)) || vs.find(v => /^da/i.test(v.lang)) || null;
-  } catch (e) { voiceDa = null; }
+let sayTimer = 0, lastSay = '', lastWho = null;
+let VOICES = [];
+function loadVoices() { try { VOICES = (window.speechSynthesis.getVoices() || []).filter(v => /^da/i.test(v.lang)); } catch (e) { VOICES = []; } }
+const QUAL = /premium|enhanced|neural|natural|online|wavenet|udvidet|forbedret/i;
+const FEM = /sara|christel|helle|naja|female|kvinde|kfm|\bf\b/i, MAL = /magnus|jeppe|mads|male|mand|nmm|\bm\b/i;
+const voiceScore = v => (QUAL.test(v.name) ? 4 : 0) + (/da-DK/i.test(v.lang) ? 1 : 0) + (/google/i.test(v.name) ? 1 : 0) + (v.localService === false ? 1 : 0);
+const voiceGender = v => FEM.test(v.name) ? 'f' : MAL.test(v.name) ? 'm' : '?';
+function bestVoice(g) {
+  if (!VOICES.length) loadVoices();
+  if (!VOICES.length) return null;
+  if (P.voice && P.voice !== 'auto') { const v = VOICES.find(v => v.name === P.voice); if (v) return v; }
+  const sorted = VOICES.slice().sort((a, b) => voiceScore(b) - voiceScore(a));
+  if (g) { const same = sorted.filter(v => voiceGender(v) === g); if (same.length) return same[0]; }
+  return sorted[0];
 }
-function speak(text, force) {
+const VP = {
+  'Bager Lone': { g: 'f', p: 1.1, r: .95 }, 'Postbud Poul': { g: 'm', p: .95, r: 1.0 }, 'Borgmester Birthe': { g: 'f', p: .9, r: .88 },
+  'Turist Maja': { g: 'f', p: 1.25, r: 1.0 }, 'Isman Ib': { g: 'm', p: 1.05, r: 1.0 }, 'Fru Hansen': { g: 'f', p: .75, r: .8 },
+  'Parkvagt Anna': { g: 'f', p: 1.05, r: .95 }, 'Svend fra Renovationen': { g: 'm', p: .8, r: .9 }, 'Mads': { g: 'f', p: 1.7, r: 1.05 },
+  'Frisør Gitte': { g: 'f', p: 1.2, r: 1.0 }, 'Bibliotekar Bente': { g: 'f', p: .85, r: .82 }, 'Fotograf Frank': { g: 'm', p: 1.0, r: 1.05 },
+  'Café-Karl': { g: 'm', p: .9, r: .95 }, 'Hundeejer Dorte': { g: 'f', p: 1.1, r: .95 }, 'Pirat-Pelle': { g: 'm', p: .7, r: .85 },
+  'Carlo': { g: 'f', p: 1.8, r: 1.15 }
+};
+function profileFor(who) {
+  if (!who) return { g: 'f', p: 1.05, r: .92 };
+  if (VP[who]) return VP[who];
+  if (who === 'Fie' || who === 'Thea') return { g: 'f', p: 1.45, r: 1.0 };
+  return { g: 'f', p: 1.05, r: .92 };
+}
+function speak(text, force, who) {
   if ((!P.speak && !force) || !text) return;
   try {
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
-    const clean = String(text).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B50}]/gu, '').replace(/\(\d+\/\d+\)/g, '').replace(/\(\s*([^)]*?)\)/g, (m, t) => t.trim() ? ', ' + t.trim() + ',' : '').replace(/\s+/g, ' ').trim();
+    const clean = String(text).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B50}]/gu, '').replace(/\(\d+\/\d+\)/g, '').replace(/\(\s*([^)]*?)\)/g, (m, t) => t.trim() ? ', ' + t.trim() + ',' : '').replace(/\s[–—-]\s/g, ', ').replace(/\s+/g, ' ').trim();
     if (!clean) return;
+    const parts = clean.match(/[^.!?]+[.!?]*/g) || [clean];
+    const pr = profileFor(who), v = bestVoice(pr.g);
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(clean);
-    u.lang = 'da-DK'; u.rate = .92; u.pitch = 1.1;
-    if (!voiceDa) pickVoice();
-    if (voiceDa) u.voice = voiceDa;
-    window.speechSynthesis.speak(u);
+    parts.forEach(part => {
+      const u = new SpeechSynthesisUtterance(part.trim());
+      u.lang = 'da-DK'; u.rate = pr.r; u.pitch = pr.p;
+      if (v) u.voice = v;
+      window.speechSynthesis.speak(u);
+    });
   } catch (e) {}
 }
-try { if (window.speechSynthesis && window.speechSynthesis.addEventListener) window.speechSynthesis.addEventListener('voiceschanged', pickVoice); } catch (e) {}
+try { if (window.speechSynthesis && window.speechSynthesis.addEventListener) window.speechSynthesis.addEventListener('voiceschanged', loadVoices); } catch (e) {}
 function say(who, text, ms) {
   const el = $('say');
-  lastSay = text;
+  lastSay = text; lastWho = who;
   el.innerHTML = '<b>' + who + '</b>' + text + '<i>🔊 Tryk her for at høre det igen</i>';
   el.classList.add('show');
   clearTimeout(sayTimer);
   sayTimer = setTimeout(() => el.classList.remove('show'), Math.max(ms || 5500, 2500 + text.length * 65));
-  speak(text);
+  speak(text, false, who);
 }
-$('say').addEventListener('pointerdown', () => { audio(); speak(lastSay, true); });
+$('say').addEventListener('pointerdown', () => { audio(); speak(lastSay, true, lastWho); });
 $('speakBtn').addEventListener('click', () => {
   audio(); P.speak = !P.speak; $('speakBtn').textContent = P.speak ? '🗣️' : '🤐'; saveProfile();
   try { if (!P.speak && window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
-  if (P.speak) speak('Nu læser jeg opgaverne højt.');
+  if (P.speak) speak('Nu læser jeg opgaverne højt.', true, null);
 });
 $('speakBtn').textContent = P.speak ? '🗣️' : '🤐';
-$('mission').addEventListener('click', () => { audio(); speak($('mText').textContent, true); });
+$('mission').addEventListener('click', () => { audio(); speak($('mText').textContent, true, null); });
 let banTimer = 0;
 function banner(t, sub) {
   const el = $('banner'); el.innerHTML = t + (sub ? '<small>' + sub + '</small>' : '');
@@ -692,6 +716,16 @@ function renderShop() {
     else { label = 'Ejer ✓'; cls = 'on'; }
     h += '<div class="item"><div class="ic">' + it.icon + '</div><div class="tx"><b>' + it.name + '</b>' + it.desc + '</div><button data-id="' + it.id + '" class="' + cls + '">' + label + '</button></div>';
   }
+  h += '<div class="grp">Stemme til oplæsning</div>';
+  loadVoices();
+  if (!VOICES.length) h += '<div class="item"><div class="tx">Jeg kan ikke se nogen danske stemmer på denne enhed endnu. Oplæsningen bruger enhedens egen stemme.</div></div>';
+  else {
+    h += '<div class="item"><div class="ic">✨</div><div class="tx"><b>Automatisk</b>Vælger den bedste stemme og giver hver person sit eget toneleje</div><button data-voice="auto" class="' + (P.voice === 'auto' ? 'on' : '') + '">' + (P.voice === 'auto' ? 'Valgt ✓' : 'Vælg') + '</button></div>';
+    VOICES.slice().sort((a, b) => voiceScore(b) - voiceScore(a)).forEach(v => {
+      h += '<div class="item"><div class="ic">🗣️</div><div class="tx"><b>' + v.name.replace(/</g, '') + '</b>' + (QUAL.test(v.name) ? 'Høj kvalitet' : 'Standard') + '</div><button data-voice="' + v.name.replace(/"/g, '') + '" class="' + (P.voice === v.name ? 'on' : '') + '">' + (P.voice === v.name ? 'Valgt ✓' : 'Hør og vælg') + '</button></div>';
+    });
+  }
+  h += '<p class="small">Tip til iPad: Hent en mere naturlig stemme under Indstillinger → Tilgængelighed → Oplæst indhold → Stemmer → Dansk. Vælg en med "Premium" eller "Udvidet" bagefter.</p>';
   $('shopList').innerHTML = h;
 }
 function openShop() { if (S.state !== 'play') return; audio(); shopOpen = true; stick.id = null; renderShop(); $('shop').classList.remove('hidden'); }
@@ -700,6 +734,11 @@ $('shopBtn').addEventListener('click', openShop);
 $('shopClose').addEventListener('click', closeShop);
 $('shopList').addEventListener('click', e => {
   const b = e.target.closest ? e.target.closest('button') : null; if (!b) return;
+  if (b.dataset.voice !== undefined) {
+    audio(); P.voice = b.dataset.voice; saveProfile();
+    speak('Hej! Jeg er ' + PN() + ', og jeg læser opgaverne højt for dig.', true, PN());
+    renderShop(); return;
+  }
   const it = ITEMS.find(i => i.id === b.dataset.id); if (!it) return; audio();
   if (!owns(it)) {
     if (P.coins < it.price) { sfx.no(); return; }
