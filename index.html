@@ -62,7 +62,7 @@ canvas#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-actio
 <canvas id="c"></canvas>
 <div id="hud">
   <div id="mission"><span id="mIcon">🏙️</span><span id="mText"></span></div>
-  <div id="right"><div id="stars">⭐ 0/8 · 🪙 0</div><button id="speakBtn" aria-label="Læs højt">🗣️</button><button id="shopBtn" aria-label="Butik">🛍️</button><button id="mute" aria-label="Lyd">🔊</button></div>
+  <div id="right"><div id="stars">⭐ 0/14 · 🪙 0</div><button id="speakBtn" aria-label="Læs højt">🗣️</button><button id="shopBtn" aria-label="Butik">🛍️</button><button id="mute" aria-label="Lyd">🔊</button></div>
 </div>
 <div id="say"></div>
 <div id="banner"></div>
@@ -262,6 +262,18 @@ const NPCS = [
     chat: ['Ællingerne vokser så hurtigt!', 'Husk at holde parken ren.'] },
   { id: 'svend', name: 'Svend fra Renovationen', x: 1765, y: 1055, o: { skin: '#e2b08a', hair: '#3a2a1a', style: 'short', top: '#ff8a1f', bot: '#33415c', hat: 'hardhat' },
     chat: ['En ren by er en glad by!'] },
+  { id: 'gitte', name: 'Frisør Gitte', x: 700, y: 708, o: { skin: '#f3cfae', hair: '#c0392b', style: 'long', top: '#b388eb', bot: '#2a2a3a' },
+    chat: ['Har du set min saks? Nå nej, den er jo fundet!', 'Carlo har den fineste pels i byen.'] },
+  { id: 'bente', name: 'Bibliotekar Bente', x: 1700, y: 708, o: { skin: '#f1cdb0', hair: '#8a8a95', style: 'bun', top: '#3f7a4a', bot: '#2a2a3a', acc: '📚' },
+    chat: ['Pssst – på biblioteket hvisker vi!', 'Carlo må gerne komme til sagnstund.'] },
+  { id: 'frank', name: 'Fotograf Frank', x: 1950, y: 708, o: { skin: '#e9b996', hair: '#2a2420', style: 'short', top: '#4f7fb5', bot: '#33415c', acc: '📷' },
+    chat: ['Smil! Det bliver et dejligt billede.', 'Ballonerne pynter flot i butikken.'] },
+  { id: 'karl', name: 'Café-Karl', x: 2200, y: 708, o: { skin: '#e2b08a', hair: '#3a2a1a', style: 'short', top: '#8a5a3a', bot: '#33415c', hat: 'whitecap', acc: '☕' },
+    chat: ['Kaffe, kakao eller en kage?', 'Hos mig er der altid plads til en hund.'] },
+  { id: 'dorte', name: 'Hundeejer Dorte', x: 905, y: 1145, o: { skin: '#f3cfae', hair: '#d9a441', style: 'long', top: '#f06292', bot: '#4a4a8a' },
+    chat: ['Bimse og Carlo er gode venner.', 'Hunde er de bedste detektiver.'] },
+  { id: 'pelle', name: 'Pirat-Pelle', x: 1745, y: 1292, o: { skin: '#e2b08a', hair: '#3a2a1a', style: 'short', top: '#c0392b', bot: '#33415c', hat: 'pirate' },
+    chat: ['Arrr! Det var en god skattejagt!', 'En pirat har altid brug for en god hund.'] },
   { id: 'mads', name: 'Mads', x: 775, y: 1305, o: { s: .82, skin: '#f3cfae', hair: '#b57a3a', style: 'short', top: '#e63946', bot: '#33415c' },
     chat: ['Min hule er den fedeste i hele byen!', 'Må Carlo være med i hulen?'] }
 ];
@@ -359,8 +371,9 @@ const PN = () => CH[P.char].name;
 /* ---------- spiltilstand ---------- */
 const player = { x: START.x, y: START.y, phase: 0, face: 1, moving: false, up: false };
 const carlo = { x: START.x - 40, y: START.y + 20, face: 1, phase: 0, moving: false, ox: -40, oy: 20, wt: 0, t: 0, send: null, pause: 0, bounce: 0 };
-const S = { active: null, phase: 'go', n: 0, sub: 0, done: {}, stars: 0, state: 'menu', carry: null, flash: 0, pending: [] };
+const S = { hidden: [], active: null, phase: 'go', n: 0, sub: 0, done: {}, stars: 0, state: 'menu', carry: null, flash: 0, pending: [] };
 let objs = [], popups = [], parts = [], T = 0;
+const TRAIL = [], DUG = [];
 const cam = { x: 0, y: 0 };
 let shopOpen = false;
 
@@ -502,6 +515,78 @@ const QUESTS = [
     start() { PH.forEach((p, i) => mk({ kind: 'use', x: p[0], y: p[1], r: 75, label: 'Tag billede ' + PHN[i], icon: '📸',
       use() { this.disabled = true; this.target = false; S.n++; S.flash = .35; sfx.hi(); pop(p[0], p[1] - 40, '📸 Klik!'); updateHud(); if (S.n >= 3) objectiveDone(); } })); } }
 ];
+const HIDE = [[300, 820], [560, 880], [820, 820], [1100, 830], [1380, 820], [1620, 800], [1900, 830], [2150, 830], [300, 1250], [520, 1330], [1100, 1260], [1300, 1430], [1500, 1400], [2250, 1150], [2150, 1280], [820, 1510], [1150, 1500], [400, 1380], [1850, 1130], [1000, 1380]];
+function pickHidden(n, e) {
+  const spots = []; let tries = 0;
+  while (spots.length < n && tries++ < 300) {
+    const p = HIDE[Math.floor(Math.random() * HIDE.length)];
+    if (dist(p[0], p[1], player.x, player.y) < 350) continue;
+    if (spots.some(q => dist(q.x, q.y, p[0], p[1]) < 320)) continue;
+    spots.push({ x: p[0], y: p[1], e, found: false });
+  }
+  for (let i = 0; spots.length < n; i++) spots.push({ x: HIDE[i][0], y: HIDE[i][1], e, found: false });
+  S.hidden = spots;
+}
+function sniffAction() {
+  if (carlo.send || S.phase !== 'go') return;
+  const left = S.hidden.filter(h => !h.found); if (!left.length) return;
+  let it = left[0], bd = 1e9;
+  for (const h of left) { const d = dist(player.x, player.y, h.x, h.y); if (d < bd) { bd = d; it = h; } }
+  if (bd < 140) {
+    sendCarlo(it.x, it.y + 8, () => {
+      it.found = true; S.n++; DUG.push({ x: it.x, y: it.y, e: it.e, t: 0 });
+      sfx.win(); confetti(it.x, it.y - 20); pop(it.x, it.y - 50, it.e + ' Fundet!'); carlo.bounce = .7;
+      say('Carlo', 'Vov vov! Carlo fandt noget!', 2500); updateHud();
+      if (S.hidden.every(h => h.found)) objectiveDone();
+    });
+    return;
+  }
+  const a = Math.atan2(it.y - player.y, it.x - player.x);
+  const tx = clamp(player.x + Math.cos(a) * 100, 40, W - 40), ty = clamp(player.y + Math.sin(a) * 100, 80, H - 20);
+  sendCarlo(tx, ty, () => {
+    const msg = bd < 280 ? 'Meget varmt! 🔥 Carlo er helt tæt på!' : bd < 550 ? 'Varmt! Carlo har fundet et spor.' : bd < 950 ? 'Lunkent… Følg sporet.' : 'Koldt 🥶 Det er langt væk. Følg sporet.';
+    say('Carlo', msg, 3500);
+    const maxN = Math.min(7, Math.floor(bd / 46));
+    for (let i = 1; i <= maxN; i++) TRAIL.push({ x: tx + Math.cos(a) * 46 * i + (i % 2 ? 5 : -5) * Math.sin(a), y: ty + Math.sin(a) * 46 * i - (i % 2 ? 5 : -5) * Math.cos(a), a, t: -i * .14 });
+  });
+}
+QUESTS.push(
+  { id: 'saks', giver: 'gitte', icon: '✂️', title: () => 'Find Gittes saks – tryk på 👃 og følg Carlo',
+    offer: 'Åh nej, min bedste saks er væk! Jeg har lagt den et sted i byen. Carlo har en fantastisk snude. Tryk på snude-knappen, så viser han vej med poteaftryk!',
+    remind: 'Tryk på snude-knappen, så viser Carlo vej med poteaftryk. Jo tættere på, jo varmere!',
+    thanks: 'Min saks! Tusind tak. Carlo er byens bedste spor-hund!', done: 'Saksen er fundet!',
+    start() { pickHidden(1, '✂️'); } },
+  { id: 'boeger', giver: 'bente', icon: '📚', title: () => 'Find de blæste bøger med Carlos snude (' + S.n + '/3)',
+    offer: 'Vinden har blæst tre bøger ud af biblioteket! Kan Carlo snuse dem op? Tryk på snude-knappen og følg hans spor.',
+    remind: 'Tryk på snude-knappen og følg poteaftrykkene. Der er tre bøger gemt i byen.',
+    thanks: 'Bøgerne er reddet! Du og Carlo er velkomne til sagnstund.', done: 'Bøgerne er fundet!',
+    start() { pickHidden(3, '📚'); } },
+  { id: 'skat', giver: 'pelle', icon: '💎', title: () => 'Find Pelles skatte med Carlos snude (' + S.n + '/3)',
+    offer: 'Arrr! Jeg har gravet tre skatte ned rundt i byen, men glemt hvor! Carlos snude kan finde dem. Tryk på snude-knappen!',
+    remind: 'Tryk på snude-knappen. Carlo viser vej, og de sidste meter graver han selv.',
+    thanks: 'Arrr, mine skatte! I er rigtige skattejægere!', done: 'Skatten er fundet!',
+    start() { pickHidden(3, '💎'); } },
+  { id: 'bimse', giver: 'dorte', icon: '🐩', title: () => 'Find Bimse – lad Carlo snuse ham op',
+    offer: 'Min lille hund Bimse er løbet hen og gemmer sig! Kan Carlo snuse ham op? Tryk på snude-knappen og følg sporet.',
+    remind: 'Tryk på snude-knappen og følg poteaftrykkene hen til Bimse.',
+    thanks: 'Åh, Bimse! Tak, Carlo. Du er en rigtig spionhund!', done: 'Bimse er fundet!',
+    start() { pickHidden(1, '🐩'); } },
+  { id: 'kaffe', giver: 'karl', icon: '☕', title: () => 'Aflever kaffe til tre personer (' + S.n + '/3)',
+    offer: 'Jeg har tre kopper kaffe, men der er kø i caféen! Kan I give dem til Poul, Maja og Svend?',
+    remind: 'Kaffen skal til Postbud Poul, Turist Maja og Svend fra Renovationen.',
+    thanks: 'Tak for hjælpen! Her er en kakao til jer og en lille kiks til Carlo.', done: 'Kaffen er leveret!',
+    start() {
+      S.carry = '☕';
+      ['poul', 'maja', 'svend'].forEach(id => { const n = npcById(id); mk({ kind: 'use', x: n.x, y: n.y, r: 90, label: 'Giv kaffe til ' + n.name.split(' ')[0] + ' ' + (n.name.split(' ')[1] || ''), icon: '☕',
+        use() { this.disabled = true; this.target = false; S.n++; sfx.pick(); pop(n.x, n.y - 90, '☕ Tak!'); updateHud(); if (S.n >= 3) objectiveDone(); } }); });
+    } },
+  { id: 'balloner', giver: 'frank', icon: '🎈', title: () => 'Fang de flyvende balloner (' + S.n + '/5)',
+    offer: 'Fem balloner til min åbning er fløjet væk! Kan I fange dem, før de forsvinder?',
+    remind: 'Ballonerne svæver rundt omkring i byen. Kig efter dem!',
+    thanks: 'Hvor flot! Nu bliver åbningen helt perfekt. Tak!', done: 'Ballonerne er fanget!',
+    start() { [[330, 900], [800, 880], [1500, 880], [1950, 1130], [1000, 1330]].forEach(p => mk({ kind: 'balloon', x: p[0], y: p[1], r: 34, auto: true, vis: true,
+      onTake(o) { S.n++; sfx.pick(); pop(o.x, o.y - 40, '🎈 +1'); updateHud(); if (S.n >= 5) objectiveDone(); } })); } }
+);
 const allDone = () => QUESTS.every(q => S.done[q.id]);
 
 function updateHud() {
@@ -515,12 +600,12 @@ function updateHud() {
   $('stars').textContent = '⭐ ' + S.stars + '/' + QUESTS.length + ' · 🪙 ' + P.coins;
 }
 function startQuest(q) {
-  S.active = q.id; S.n = 0; S.sub = 0; S.phase = 'go'; objs = []; S.carry = null;
+  S.active = q.id; S.n = 0; S.sub = 0; S.phase = 'go'; objs = []; S.carry = null; S.hidden = []; TRAIL.length = 0;
   q.start(); sfx.hi(); updateHud();
   say(npcById(q.giver).name, q.offer, 8000);
 }
 function completeQuest(q) {
-  S.done[q.id] = true; S.active = null; S.stars++; S.carry = null; P.coins += 10; objs = [];
+  S.done[q.id] = true; S.active = null; S.stars++; S.carry = null; P.coins += 10; objs = []; S.hidden = [];
   saveProg(); saveProfile(); sfx.win(); confetti(player.x, player.y - 30);
   banner('⭐ Opgave klaret!', q.done + ' +10 🪙');
   say(npcById(q.giver).name, q.thanks, 6000);
@@ -567,7 +652,7 @@ function newGame(resume) {
   DUCKS.forEach(d => d.fed = false);
   BUSHES.forEach(b => { b.found = false; b.checked = false; b.ball = false; });
   COINS.forEach(c => { c.taken = false; });
-  S.active = null; S.carry = null; S.phase = 'go'; S.n = 0; S.sub = 0;
+  S.active = null; S.carry = null; S.phase = 'go'; S.n = 0; S.sub = 0; S.hidden = []; TRAIL.length = 0; DUG.length = 0;
   S.done = resume ? Object.assign({}, resume.done) : {};
   S.stars = resume ? resume.stars : 0;
   S.state = 'play';
@@ -766,6 +851,7 @@ function update(dt) {
       if (d < 90 && d < best) { best = d; cur = { npc: n, label: npcLabel(n), icon: '💬', use() { talk(n); } }; }
     }
   }
+  if (!cur && S.state === 'play' && S.phase === 'go' && S.hidden.some(h => !h.found)) cur = { label: 'Lad Carlo snuse', icon: '👃', use: sniffAction };
   const key = cur ? cur.icon + cur.label : 'none';
   if (key !== lastKey) {
     lastKey = key;
@@ -779,6 +865,10 @@ function update(dt) {
     if (c.taken) { c.t += dt; if (c.t > 80) c.taken = false; continue; }
     if (S.state === 'play' && dist(player.x, player.y, c.x, c.y) < 26 + (has('gloves') ? 32 : 0)) { c.taken = true; c.t = 0; P.coins++; sfx.coin(); pop(c.x, c.y - 14, '+1 🪙'); saveProfile(); updateHud(); }
   }
+  for (const t of TRAIL) t.t += dt;
+  for (let i = TRAIL.length - 1; i >= 0; i--) if (TRAIL[i].t > 6) TRAIL.splice(i, 1);
+  for (const d of DUG) d.t += dt;
+  for (let i = DUG.length - 1; i >= 0; i--) if (DUG[i].t > 5) DUG.splice(i, 1);
   for (const b of BUSHES) if (b.shake > 0) b.shake -= dt * 1.4;
   for (const p of popups) p.t += dt; popups = popups.filter(p => p.t < 1.4);
   for (const p of parts) { p.t += dt; p.vy += 520 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
@@ -911,6 +1001,7 @@ function drawItem(o) {
     ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(o.x + 2, o.y - 1); ctx.lineTo(o.x + 8, o.y - 10); ctx.stroke();
   } else if (o.kind === 'flower') { ell(o.x, o.y + 3, 10, 4, 'rgba(0,0,0,.15)'); emo('🌸', o.x, o.y - 8 + bob, 28); }
   else if (o.kind === 'croissant') { ell(o.x, o.y + 3, 10, 4, 'rgba(0,0,0,.15)'); emo('🥐', o.x, o.y - 8 + bob, 28); }
+  else if (o.kind === 'balloon') { const by = Math.sin(T * 2 + o.x) * 6; ell(o.x, o.y + 4, 9, 3, 'rgba(0,0,0,.15)'); ctx.strokeStyle = 'rgba(80,80,80,.6)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(o.x, o.y - 30 + by); ctx.lineTo(o.x, o.y); ctx.stroke(); emo('🎈', o.x, o.y - 42 + by, 30); }
   else if (o.kind === 'litter') { ell(o.x, o.y + 3, 10, 4, 'rgba(0,0,0,.15)'); emo(o.e, o.x, o.y - 8, 24); }
 }
 
@@ -1014,6 +1105,7 @@ function drawPerson(n) {
   if (o.hat === 'postcap') { ctx.fillStyle = '#2b5fb0'; ctx.beginPath(); ctx.arc(x, hy - 2, 13.5, Math.PI, 0); ctx.fill(); ctx.fillRect(x - 14, hy - 4, 28, 4); ctx.fillRect(x + 4, hy - 3, 14, 3); circ(x, hy - 9, 2.5, '#ffd23f'); }
   if (o.hat === 'whitecap') { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, hy - 2, 13.5, Math.PI, 0); ctx.fill(); ctx.fillRect(x - 14, hy - 4, 28, 4); }
   if (o.hat === 'ranger') { ctx.fillStyle = '#7a5a2a'; ell(x, hy - 5, 20, 5, '#7a5a2a'); ctx.beginPath(); ctx.arc(x, hy - 6, 11, Math.PI, 0); ctx.fill(); ctx.fillStyle = '#3f9a5a'; ctx.fillRect(x - 11, hy - 9, 22, 3); }
+  if (o.hat === 'pirate') { ctx.fillStyle = '#222'; ctx.beginPath(); ctx.moveTo(x - 18, hy - 2); ctx.lineTo(x, hy - 21); ctx.lineTo(x + 18, hy - 2); ctx.closePath(); ctx.fill(); circ(x, hy - 9, 2.6, '#fff'); ctx.fillStyle = '#fff'; ctx.fillRect(x - 5, hy - 5, 10, 1.5); }
   if (o.hat === 'hardhat') { ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(x, hy - 2, 14, Math.PI, 0); ctx.fill(); ctx.fillRect(x - 16, hy - 4, 32, 4); ctx.fillRect(x - 2, hy - 15, 4, 8); }
   ctx.restore();
   if (o.acc) emo(o.acc, x + 14 * s, y - 20, 16);
@@ -1120,6 +1212,14 @@ function render() {
     ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.ellipse(c.x, c.y - 9 + by, w, 8, 0, 0, 7); ctx.fill();
     ctx.fillStyle = '#fff3b0'; ctx.beginPath(); ctx.ellipse(c.x - w * .3, c.y - 12 + by, Math.max(1, w * .3), 3, 0, 0, 7); ctx.fill();
   }
+  for (const t of TRAIL) {
+    if (t.t < 0) continue;
+    const al = clamp(Math.min(t.t * 4, (6 - t.t) / 1.5), 0, 1);
+    ctx.save(); ctx.translate(t.x, t.y); ctx.rotate(t.a + Math.PI / 2); ctx.globalAlpha = al;
+    ctx.fillStyle = '#5a3d28'; ell(0, 2, 5.5, 4.5, '#5a3d28'); circ(-5.5, -4, 2.4, '#5a3d28'); circ(-2, -8, 2.4, '#5a3d28'); circ(2, -8, 2.4, '#5a3d28'); circ(5.5, -4, 2.4, '#5a3d28');
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
   // sorterede ting
   const L = [];
   const vis = (x, y) => x > x0 - 140 && x < x1 + 140 && y > y0 && y < y1 + 260;
@@ -1130,6 +1230,7 @@ function render() {
   for (const l of LAMPS) L.push([l[1], () => drawLamp(l)]);
   for (const m of MAIL) L.push([m[1], () => drawMail(m)]);
   for (const o of objs) if (o.vis && !o.taken) L.push([o.y, () => drawItem(o)]);
+  for (const d of DUG) L.push([d.y, () => { ell(d.x, d.y + 2, 18, 8, '#6b4a2a'); ell(d.x, d.y + 1, 13, 5, '#4a3320'); emo(d.e, d.x, d.y - 14 - Math.abs(Math.sin(d.t * 5)) * 8, 28); }]);
   L.push([DUCKS[0].wy - 300, drawDucks]);
   for (const n of NPCS) if (vis(n.x, n.y)) L.push([n.y, () => { if (!n.custom) drawPerson(n); indicator(n); }]);
   L.push([player.y, () => drawPlayerSprite(player.x, player.y, player, P.char, S.carry, false)]);
